@@ -2,12 +2,20 @@
 
 Ein einfaches Terminalwerkzeug, um Stücklisten (Bill of Materials, BOM) und Produktionsbedarfe für HiL-Schränke zu verwalten. Die Daten werden in einer SQLite-Datei gespeichert.
 
-## Installation
+## Installation & Ausführung
 
 Python 3.11 oder neuer wird empfohlen. Abhängigkeiten außerhalb der Standardbibliothek sind nicht erforderlich.
 
+1. Öffne ein Terminal **im Projektordner** (z. B. `cd C:\Repos\St-cklistenTool` unter Windows oder `cd /pfad/zu/St-cklistenTool` unter Linux/macOS).
+2. Führe `python -m stuecklisten_tool --help` aus, um alle verfügbaren Befehle zu sehen.
+
+> 💡 Wenn die Meldung `ModuleNotFoundError: No module named 'stuecklisten_tool'` erscheint, bist du höchstwahrscheinlich nicht im Projektverzeichnis. Navigiere in den Ordner, der den Unterordner `stuecklisten_tool` enthält, oder rufe alternativ `python stuecklisten_tool/cli.py --help` auf.
+
+Optional kannst du das Projekt auch lokal installieren, um den Befehl systemweit zu nutzen:
+
 ```bash
-python -m stuecklisten_tool --help
+python -m pip install -e .
+stuecklisten-tool --help
 ```
 
 ## Datenbank
