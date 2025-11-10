@@ -14,6 +14,7 @@ class Part:
     part_number: str
     description: str | None
     supplier: str | None
+    manufacturer: str | None
     price: float | None
     store_link: str | None
 
@@ -29,19 +30,44 @@ class Requirement:
     part_number: str
     description: str | None
     supplier: str | None
+    manufacturer: str | None
     price: float | None
     total_quantity: float
     total_cost: float | None
+
+
+@dataclass
+class SupplierRequirement:
+    supplier: str | None
+    total_quantity: float
+    total_cost: float | None
+
+
+@dataclass
+class PartOrder:
+    id: int | None
+    part_number: str
+    quantity: float
+    order_date: str | None
+    delivery_date: str | None
+    status: str
 
 
 def add_part(conn: sqlite3.Connection, part: Part) -> None:
     with transaction(conn) as cur:
         cur.execute(
             """
-            INSERT INTO parts(part_number, description, supplier, price, store_link)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO parts(part_number, description, supplier, manufacturer, price, store_link)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (part.part_number, part.description, part.supplier, part.price, part.store_link),
+            (
+                part.part_number,
+                part.description,
+                part.supplier,
+                part.manufacturer,
+                part.price,
+                part.store_link,
+            ),
         )
 
 
@@ -53,10 +79,17 @@ def update_part(conn: sqlite3.Connection, part: Part) -> None:
         cur.execute(
             """
             UPDATE parts
-               SET description = ?, supplier = ?, price = ?, store_link = ?
+               SET description = ?, supplier = ?, manufacturer = ?, price = ?, store_link = ?
              WHERE part_number = ?
             """,
-            (part.description, part.supplier, part.price, part.store_link, part.part_number),
+            (
+                part.description,
+                part.supplier,
+                part.manufacturer,
+                part.price,
+                part.store_link,
+                part.part_number,
+            ),
         )
 
 
@@ -101,9 +134,9 @@ def update_product(conn: sqlite3.Connection, product: Product) -> None:
 def list_parts(conn: sqlite3.Connection) -> Sequence[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT part_number, description, supplier, price, store_link
+        SELECT part_number, description, supplier, manufacturer, price, store_link
           FROM parts
-         ORDER BY part_number
+         ORDER BY description COLLATE NOCASE, part_number COLLATE NOCASE
         """
     ).fetchall()
 
@@ -177,6 +210,7 @@ def list_bom_entries(conn: sqlite3.Connection, product: str) -> Sequence[sqlite3
         SELECT parts.part_number,
                parts.description,
                parts.supplier,
+               parts.manufacturer,
                parts.price,
                parts.store_link,
                bom.quantity
@@ -195,6 +229,7 @@ def fetch_requirements(conn: sqlite3.Connection) -> List[Requirement]:
         SELECT parts.part_number,
                parts.description,
                parts.supplier,
+               parts.manufacturer,
                parts.price,
                SUM(bom.quantity * req.quantity) AS total_quantity
           FROM bill_of_materials AS bom
@@ -214,12 +249,108 @@ def fetch_requirements(conn: sqlite3.Connection) -> List[Requirement]:
                 part_number=row["part_number"],
                 description=row["description"],
                 supplier=row["supplier"],
+                manufacturer=row["manufacturer"],
                 price=price,
                 total_quantity=total_qty,
                 total_cost=total_cost,
             )
         )
     return requirements
+
+
+def fetch_supplier_requirements(conn: sqlite3.Connection) -> List[SupplierRequirement]:
+    rows = conn.execute(
+        """
+        SELECT parts.supplier,
+               SUM(bom.quantity * req.quantity) AS total_quantity,
+               SUM(
+                   CASE WHEN parts.price IS NOT NULL
+                        THEN parts.price * bom.quantity * req.quantity
+                        ELSE NULL
+                   END
+               ) AS total_cost
+          FROM bill_of_materials AS bom
+          JOIN product_requirements AS req ON req.product_id = bom.product_id
+          JOIN parts ON parts.id = bom.part_id
+         GROUP BY parts.supplier
+         ORDER BY parts.supplier COLLATE NOCASE
+        """
+    ).fetchall()
+    summaries: List[SupplierRequirement] = []
+    for row in rows:
+        total_quantity = row["total_quantity"] or 0.0
+        total_cost = row["total_cost"]
+        summaries.append(
+            SupplierRequirement(
+                supplier=row["supplier"],
+                total_quantity=total_quantity,
+                total_cost=total_cost,
+            )
+        )
+    return summaries
+
+
+ORDER_STATUSES = ("Offen", "Bestellt", "In Zulieferung", "Geliefert", "Im Lager")
+
+
+def add_order(conn: sqlite3.Connection, order: PartOrder) -> int:
+    if order.status not in ORDER_STATUSES:
+        raise ValueError("Ungültiger Bestellstatus")
+    part_id = get_part_id(conn, order.part_number)
+    with transaction(conn) as cur:
+        cursor = cur.execute(
+            """
+            INSERT INTO orders(part_id, quantity, order_date, delivery_date, status)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (part_id, order.quantity, order.order_date, order.delivery_date, order.status),
+        )
+        return int(cursor.lastrowid)
+
+
+def update_order(conn: sqlite3.Connection, order: PartOrder) -> None:
+    if order.id is None:
+        raise ValueError("Order-ID fehlt")
+    if order.status not in ORDER_STATUSES:
+        raise ValueError("Ungültiger Bestellstatus")
+    part_id = get_part_id(conn, order.part_number)
+    with transaction(conn) as cur:
+        result = cur.execute(
+            """
+            UPDATE orders
+               SET part_id = ?, quantity = ?, order_date = ?, delivery_date = ?, status = ?
+             WHERE id = ?
+            """,
+            (part_id, order.quantity, order.order_date, order.delivery_date, order.status, order.id),
+        )
+        if result.rowcount == 0:
+            raise ValueError("Bestellung existiert nicht")
+
+
+def remove_order(conn: sqlite3.Connection, order_id: int) -> None:
+    with transaction(conn) as cur:
+        result = cur.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+        if result.rowcount == 0:
+            raise ValueError("Bestellung existiert nicht")
+
+
+def list_orders(conn: sqlite3.Connection) -> Sequence[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT o.id,
+               o.quantity,
+               o.order_date,
+               o.delivery_date,
+               o.status,
+               p.part_number,
+               p.description,
+               p.supplier,
+               p.manufacturer
+          FROM orders AS o
+          JOIN parts AS p ON p.id = o.part_id
+         ORDER BY o.order_date IS NULL, o.order_date, o.id
+        """
+    ).fetchall()
 
 
 def clone_bom(conn: sqlite3.Connection, source_product: str, target_product: str, scale: float = 1.0) -> None:

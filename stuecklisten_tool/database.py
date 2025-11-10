@@ -14,6 +14,7 @@ SCHEMA = [
         part_number TEXT NOT NULL UNIQUE,
         description TEXT,
         supplier TEXT,
+        manufacturer TEXT,
         price REAL,
         store_link TEXT
     )
@@ -70,6 +71,17 @@ SCHEMA = [
         PRIMARY KEY (version_id, product_name)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        part_id INTEGER NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
+        quantity REAL NOT NULL CHECK(quantity > 0),
+        order_date TEXT,
+        delivery_date TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """,
 ]
 
 
@@ -89,6 +101,14 @@ def initialize_database(conn: sqlite3.Connection) -> None:
     with conn:
         for statement in SCHEMA:
             conn.execute(statement)
+        _ensure_column(conn, "parts", "manufacturer", "ALTER TABLE parts ADD COLUMN manufacturer TEXT")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(row[1] == column for row in info):
+        return
+    conn.execute(ddl)
 
 
 @contextlib.contextmanager

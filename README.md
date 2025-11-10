@@ -20,7 +20,11 @@ stuecklisten-tool --help
 
 ## Grafische Oberfläche
 
-Neben dem Terminal-Interface gibt es eine einfache Oberfläche auf Basis von Tkinter. Sie zeigt Teile, Produkte, Stücklisten sowie den aggregierten Teilebedarf an und erlaubt das Bearbeiten der wichtigsten Daten.
+Neben dem Terminal-Interface gibt es eine Oberfläche auf Basis von Tkinter. Alle Tabellen besitzen Suchfelder und lassen sich per Spaltenkopf sortieren – so findest du auch bei großen Datenbeständen schnell die passenden Einträge. Zusätzlich zur Pflege von Teilen, Produkten und Stücklisten bietet der Auswertungsbereich nun:
+
+- einen Überblick über den aggregierten Teilebedarf inklusive Hersteller- und Lieferanteninformationen,
+- eine zweite Übersicht, die den Gesamtbedarf pro Lieferant aufschlüsselt,
+- einen Reiter „Bestellungen“ zum Erfassen, Aktualisieren und Verfolgen von Bestellungen (inkl. Status, Bestell- und Lieferdatum).
 
 ```bash
 python -m stuecklisten_tool gui
@@ -43,13 +47,16 @@ Standardmäßig legt das Programm eine Datei `stuecklisten.db` im aktuellen Verz
 | Befehl | Beschreibung |
 | --- | --- |
 | `init-db` | Datenbankschema anlegen |
-| `add-part` / `update-part` / `remove-part` | Teile verwalten |
+| `add-part` / `update-part` / `remove-part` | Teile (inkl. Herstellerinformationen) verwalten |
 | `add-product` / `update-product` / `remove-product` | Produkte (HiL-Schränke) verwalten |
 | `set-bom-entry` | Teil mit Menge einer Stückliste zuordnen |
 | `set-demand` | Produktionsbedarf für ein Produkt hinterlegen |
 | `calculate-requirements` | Gesamte Teilebedarfe und Kosten über alle Produkte berechnen |
+| `supplier-summary` | Aggregierte Bedarfe pro Lieferant anzeigen |
 | `predict-bom` | Stückliste eines bestehenden Produkts kopieren (optional mit Skalierung) |
 | `create-version`, `list-versions`, `show-version` | Momentaufnahme der aktuellen Daten speichern und anzeigen |
+| `add-order` / `update-order` / `remove-order` | Bestellungen zu Teilen verwalten |
+| `list-orders` | Alle Bestellungen auflisten |
 
 Alle Befehle besitzen weitere Optionen. Die vollständige Übersicht liefert `python -m stuecklisten_tool --help` oder `python -m stuecklisten_tool <befehl> --help`.
 
@@ -60,7 +67,7 @@ Alle Befehle besitzen weitere Optionen. Die vollständige Übersicht liefert `py
 python -m stuecklisten_tool init-db
 
 # Teil und Produkt anlegen
-python -m stuecklisten_tool add-part T1 --description "Netzteil" --supplier "ACME" --price 49.9
+python -m stuecklisten_tool add-part T1 --description "Netzteil" --manufacturer "ACME Energy" --supplier "ACME" --price 49,90
 python -m stuecklisten_tool add-product "HiL Schrank 1" --description "Standardausführung"
 
 # Stückliste und Bedarf erfassen
@@ -69,7 +76,18 @@ python -m stuecklisten_tool set-demand "HiL Schrank 1" 2
 
 # Gesamten Teilebedarf berechnen
 python -m stuecklisten_tool calculate-requirements
+
+# Bedarf pro Lieferant anzeigen
+python -m stuecklisten_tool supplier-summary
+
+# Bestellung anlegen und verwalten
+python -m stuecklisten_tool add-order T1 6 --order-date 2024-05-01 --status "Bestellt"
+python -m stuecklisten_tool list-orders
 ```
+
+## Bestellungen & Lieferübersichten
+
+Mit dem neuen Bestellmodul kannst du für jedes Teil Bestellungen mit Menge, Status, Bestell- und Lieferdatum erfassen. Die GUI bündelt diese Informationen im Reiter „Bestellungen“, während die Auswertung zusätzlich zeigt, wie viele Teile pro Lieferant insgesamt benötigt werden. So hast du sowohl den aktuellen Bedarf als auch offene Bestellungen jederzeit im Blick.
 
 ## Versionierung
 

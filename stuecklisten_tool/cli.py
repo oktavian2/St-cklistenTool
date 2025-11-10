@@ -16,57 +16,87 @@ if __package__ in {None, ""}:
 
     from stuecklisten_tool import database
     from stuecklisten_tool.operations import (
+        ORDER_STATUSES,
         Part,
+        PartOrder,
         Product,
+        SupplierRequirement,
+        add_order,
+        add_part,
+        add_product,
         clone_bom,
         create_version,
         fetch_requirements,
+        fetch_supplier_requirements,
+        get_product_requirement,
+        get_version_details,
+        list_bom_entries,
+        list_orders,
         list_parts,
         list_product_requirements,
         list_products,
         list_versions,
-        list_bom_entries,
         remove_bom_entry,
+        remove_order,
         remove_part,
         remove_product,
         remove_requirement,
         set_bom_entry,
         set_product_requirement,
+        update_order,
         update_part,
         update_product,
-        add_part,
-        add_product,
-        get_version_details,
-        get_product_requirement,
     )
 else:
     from . import database
     from .operations import (
+        ORDER_STATUSES,
         Part,
+        PartOrder,
         Product,
+        SupplierRequirement,
+        add_order,
         clone_bom,
         create_version,
         fetch_requirements,
+        fetch_supplier_requirements,
         list_parts,
+        list_orders,
         list_product_requirements,
         list_products,
         list_versions,
         list_bom_entries,
         remove_bom_entry,
+        remove_order,
         remove_part,
         remove_product,
         remove_requirement,
         set_bom_entry,
         set_product_requirement,
-        update_part,
-        update_product,
         add_part,
         add_product,
+        update_order,
+        update_part,
+        update_product,
         get_version_details,
         get_product_requirement,
     )
 
 DEFAULT_DB_PATH = Path("stuecklisten.db")
+
+
+def parse_decimal(value: str) -> float:
+    text = value.strip().replace(" ", "")
+    if not text:
+        raise argparse.ArgumentTypeError("Wert darf nicht leer sein")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    else:
+        text = text
+    try:
+        return float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Ungültige Zahl: {value}") from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,14 +115,16 @@ def build_parser() -> argparse.ArgumentParser:
     part_parser.add_argument("part_number")
     part_parser.add_argument("--description")
     part_parser.add_argument("--supplier")
-    part_parser.add_argument("--price", type=float)
+    part_parser.add_argument("--manufacturer")
+    part_parser.add_argument("--price", type=parse_decimal)
     part_parser.add_argument("--store-link")
 
     update_part_parser = subparsers.add_parser("update-part", help="Teil aktualisieren")
     update_part_parser.add_argument("part_number")
     update_part_parser.add_argument("--description")
     update_part_parser.add_argument("--supplier")
-    update_part_parser.add_argument("--price", type=float)
+    update_part_parser.add_argument("--manufacturer")
+    update_part_parser.add_argument("--price", type=parse_decimal)
     update_part_parser.add_argument("--store-link")
 
     subparsers.add_parser("list-parts", help="Alle Teile anzeigen")
@@ -138,6 +170,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ergebnis als JSON ausgeben",
     )
 
+    subparsers.add_parser(
+        "supplier-summary",
+        help="Aggregierte Bestellmengen nach Lieferant anzeigen",
+    )
+
+    order_parser = subparsers.add_parser("add-order", help="Neue Bestellung erfassen")
+    order_parser.add_argument("part_number")
+    order_parser.add_argument("quantity", type=parse_decimal)
+    order_parser.add_argument("--order-date")
+    order_parser.add_argument("--delivery-date")
+    order_parser.add_argument("--status", choices=ORDER_STATUSES, default=ORDER_STATUSES[0])
+
+    update_order_parser = subparsers.add_parser("update-order", help="Bestehende Bestellung ändern")
+    update_order_parser.add_argument("order_id", type=int)
+    update_order_parser.add_argument("part_number")
+    update_order_parser.add_argument("quantity", type=parse_decimal)
+    update_order_parser.add_argument("--order-date")
+    update_order_parser.add_argument("--delivery-date")
+    update_order_parser.add_argument("--status", choices=ORDER_STATUSES, default=ORDER_STATUSES[0])
+
+    subparsers.add_parser("list-orders", help="Alle Bestellungen anzeigen")
+
+    remove_order_parser = subparsers.add_parser("remove-order", help="Bestellung löschen")
+    remove_order_parser.add_argument("order_id", type=int)
+
     clone_parser = subparsers.add_parser("predict-bom", help="Stückliste eines Produkts auf ein anderes kopieren")
     clone_parser.add_argument("source_product")
     clone_parser.add_argument("target_product")
@@ -182,6 +239,7 @@ def command_add_part(conn, args) -> None:
             part_number=args.part_number,
             description=args.description,
             supplier=args.supplier,
+            manufacturer=args.manufacturer,
             price=args.price,
             store_link=args.store_link,
         ),
@@ -196,6 +254,7 @@ def command_update_part(conn, args) -> None:
             part_number=args.part_number,
             description=args.description,
             supplier=args.supplier,
+            manufacturer=args.manufacturer,
             price=args.price,
             store_link=args.store_link,
         ),
@@ -210,7 +269,12 @@ def command_list_parts(conn, _args) -> None:
         return
     for row in rows:
         price = format_money(row["price"])
-        print(f"{row['part_number']}: {row['description'] or '-'} | Lieferant: {row['supplier'] or '-'} | Preis: {price}")
+        manufacturer = row["manufacturer"] or "-"
+        supplier = row["supplier"] or "-"
+        print(
+            f"{row['part_number']}: {row['description'] or '-'} | Hersteller: {manufacturer} "
+            f"| Lieferant: {supplier} | Preis: {price}"
+        )
         if row["store_link"]:
             print(f"    Link: {row['store_link']}")
 
@@ -282,6 +346,7 @@ def command_calculate_requirements(conn, args) -> None:
                 "part_number": req.part_number,
                 "description": req.description,
                 "supplier": req.supplier,
+                "manufacturer": req.manufacturer,
                 "price": req.price,
                 "total_quantity": req.total_quantity,
                 "total_cost": req.total_cost,
@@ -296,16 +361,80 @@ def command_calculate_requirements(conn, args) -> None:
         return
 
     total_cost = 0.0
-    print("Teil | Menge gesamt | Einzelpreis | Gesamtkosten")
-    print("-" * 72)
+    print("Teil | Menge gesamt | Hersteller | Lieferant | Einzelpreis | Gesamtkosten")
+    print("-" * 110)
     for req in requirements:
         total_cost += req.total_cost or 0.0
         print(
-            f"{req.part_number}: {req.description or '-'} | {req.total_quantity} | "
-            f"{format_money(req.price)} | {format_money(req.total_cost)}"
+            f"{req.part_number}: {req.description or '-'} | {req.total_quantity} | {req.manufacturer or '-'} | "
+            f"{req.supplier or '-'} | {format_money(req.price)} | {format_money(req.total_cost)}"
         )
-    print("-" * 72)
+    print("-" * 110)
     print(f"Summe: {format_money(total_cost)}")
+
+
+def command_supplier_summary(conn, _args) -> None:
+    summaries = fetch_supplier_requirements(conn)
+    if not summaries:
+        print("Keine aggregierten Bedarfe vorhanden.")
+        return
+    print("Lieferant | Gesamtmenge | Gesamtkosten")
+    print("-" * 60)
+    for summary in summaries:
+        supplier = summary.supplier or "-"
+        print(
+            f"{supplier}: {summary.total_quantity:.2f} | {format_money(summary.total_cost)}"
+        )
+
+
+def command_add_order(conn, args) -> None:
+    order_id = add_order(
+        conn,
+        PartOrder(
+            id=None,
+            part_number=args.part_number,
+            quantity=args.quantity,
+            order_date=args.order_date,
+            delivery_date=args.delivery_date,
+            status=args.status,
+        ),
+    )
+    print(f"Bestellung {order_id} angelegt.")
+
+
+def command_update_order(conn, args) -> None:
+    update_order(
+        conn,
+        PartOrder(
+            id=args.order_id,
+            part_number=args.part_number,
+            quantity=args.quantity,
+            order_date=args.order_date,
+            delivery_date=args.delivery_date,
+            status=args.status,
+        ),
+    )
+    print(f"Bestellung {args.order_id} aktualisiert.")
+
+
+def command_list_orders(conn, _args) -> None:
+    rows = list_orders(conn)
+    if not rows:
+        print("Keine Bestellungen vorhanden.")
+        return
+    print("ID | Teil | Menge | Bestelldatum | Lieferdatum | Status")
+    print("-" * 88)
+    for row in rows:
+        part_label = f"{row['part_number']} ({row['description'] or '-'})"
+        print(
+            f"{row['id']} | {part_label} | {row['quantity']:.2f} | "
+            f"{row['order_date'] or '-'} | {row['delivery_date'] or '-'} | {row['status']}"
+        )
+
+
+def command_remove_order(conn, args) -> None:
+    remove_order(conn, args.order_id)
+    print(f"Bestellung {args.order_id} gelöscht.")
 
 
 def command_predict_bom(conn, args) -> None:
@@ -400,10 +529,15 @@ COMMANDS = {
     "remove-demand": command_remove_demand,
     "list-demands": command_list_demands,
     "calculate-requirements": command_calculate_requirements,
+    "supplier-summary": command_supplier_summary,
     "predict-bom": command_predict_bom,
     "create-version": command_create_version,
     "list-versions": command_list_versions,
     "show-version": command_show_version,
+    "add-order": command_add_order,
+    "update-order": command_update_order,
+    "list-orders": command_list_orders,
+    "remove-order": command_remove_order,
     "gui": command_gui,
 }
 
