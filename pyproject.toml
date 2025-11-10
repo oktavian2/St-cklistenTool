@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stuecklisten-tool"
+version = "0.1.0"
+description = "Verwaltung von Stücklisten und Produktionsbedarfen"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Unspecified"}]
+dependencies = []
+
+[project.scripts]
+stuecklisten-tool = "stuecklisten_tool.cli:main"
