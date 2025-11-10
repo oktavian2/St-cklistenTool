@@ -456,7 +456,7 @@ class Application(ttk.Frame):
         if not product:
             messagebox.showinfo("Hinweis", "Bitte zuerst ein Produkt auswählen.")
             return
-        dialog = BomDialog(self, title="Teil zuordnen")
+        dialog = BomDialog(self, self.conn, title="Teil zuordnen")
         if dialog.result is None:
             return
         try:
@@ -476,6 +476,7 @@ class Application(ttk.Frame):
         item = self.bom_tree.item(part_number)
         dialog = BomDialog(
             self,
+            self.conn,
             title="Menge anpassen",
             entry={"part_number": part_number, "quantity": float(item["values"][3])},
             allow_part_edit=False,
@@ -625,12 +626,23 @@ class BomDialog(simpledialog.Dialog):
     def __init__(
         self,
         parent: tk.Misc,
+        conn: sqlite3.Connection,
         title: str,
         entry: Optional[dict[str, Any]] = None,
         allow_part_edit: bool = True,
     ) -> None:
         self._initial = entry or {}
         self._allow_part_edit = allow_part_edit
+        self._parts = [
+            {
+                "part_number": row["part_number"],
+                "description": row["description"] or "",
+                "supplier": row["supplier"] or "",
+            }
+            for row in list_parts(conn)
+        ]
+        self._filtered_parts: list[dict[str, str]] = []
+        self._updating_from_selection = False
         super().__init__(parent, title)
 
     def body(self, master: tk.Misc) -> tk.Widget:
@@ -646,7 +658,38 @@ class BomDialog(simpledialog.Dialog):
         self.quantity_var = tk.StringVar(value="" if quantity is None else str(quantity))
         ttk.Entry(master, textvariable=self.quantity_var, width=40).grid(row=1, column=1, sticky="ew")
 
-        master.columnconfigure(1, weight=1)
+        if self._allow_part_edit:
+            self.part_var.trace_add("write", self._on_part_var_change)
+
+            columns = ("part_number", "description", "supplier")
+            self.parts_tree = ttk.Treeview(
+                master,
+                columns=columns,
+                show="headings",
+                height=8,
+            )
+            self.parts_tree.heading("part_number", text="Teilenummer")
+            self.parts_tree.heading("description", text="Beschreibung")
+            self.parts_tree.heading("supplier", text="Lieferant")
+            self.parts_tree.column("part_number", width=140, anchor="w")
+            self.parts_tree.column("description", width=220, anchor="w")
+            self.parts_tree.column("supplier", width=160, anchor="w")
+            self.parts_tree.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
+
+            y_scroll = ttk.Scrollbar(master, orient="vertical", command=self.parts_tree.yview)
+            self.parts_tree.configure(yscrollcommand=y_scroll.set)
+            y_scroll.grid(row=2, column=2, sticky="ns", pady=(8, 0))
+
+            self.parts_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+            self.parts_tree.bind("<Double-1>", self._on_tree_double_click)
+            self.parts_tree.bind("<Return>", self._on_tree_double_click)
+
+            master.columnconfigure(1, weight=1)
+            master.rowconfigure(2, weight=1)
+            self._refresh_filtered_parts()
+        else:
+            master.columnconfigure(1, weight=1)
+
         return entry_part
 
     def validate(self) -> bool:
@@ -669,6 +712,56 @@ class BomDialog(simpledialog.Dialog):
             "part_number": self.part_var.get().strip(),
             "quantity": float(self.quantity_var.get().strip()),
         }
+
+    # ------------------------------------------------------------------
+    def _on_part_var_change(self, *_: Any) -> None:
+        if self._updating_from_selection:
+            return
+        self._refresh_filtered_parts()
+
+    def _refresh_filtered_parts(self) -> None:
+        query = self.part_var.get().strip().lower()
+        if not query:
+            self._filtered_parts = list(self._parts)
+        else:
+            self._filtered_parts = [
+                part
+                for part in self._parts
+                if query in part["part_number"].lower()
+                or query in part["description"].lower()
+                or query in part["supplier"].lower()
+            ]
+
+        for item in self.parts_tree.get_children():
+            self.parts_tree.delete(item)
+
+        for part in self._filtered_parts:
+            self.parts_tree.insert(
+                "",
+                "end",
+                iid=part["part_number"],
+                values=(part["part_number"], part["description"], part["supplier"]),
+            )
+
+        current = self.part_var.get().strip()
+        if current and self.parts_tree.exists(current):
+            self.parts_tree.selection_set(current)
+            self.parts_tree.see(current)
+        else:
+            self.parts_tree.selection_remove(self.parts_tree.selection())
+
+    def _on_tree_select(self, _event: tk.Event) -> None:
+        selection = self.parts_tree.selection()
+        if not selection:
+            return
+        part_number = selection[0]
+        self._updating_from_selection = True
+        self.part_var.set(part_number)
+        self._updating_from_selection = False
+
+    def _on_tree_double_click(self, _event: tk.Event) -> None:
+        if self.parts_tree.selection():
+            self.ok()
 
 
 def launch_gui(conn: sqlite3.Connection, db_path: Path | str) -> None:
