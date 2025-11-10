@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import calendar
 import sqlite3
 import tkinter as tk
+from datetime import date, datetime
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 from typing import Any, Optional
 
 from .operations import (
     ORDER_STATUSES,
+    Order,
+    OrderItem,
+    OrderSummary,
     Part,
-    PartOrder,
     Product,
     add_order,
     add_part,
@@ -57,6 +61,16 @@ def format_decimal_entry(value: float | None) -> str:
     if value is None:
         return ""
     return f"{value:.2f}".replace(".", ",")
+
+
+def parse_iso_date(text: str) -> date | None:
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 def format_currency(value: float | None) -> str:
@@ -339,22 +353,18 @@ class Application(ttk.Frame):
 
         columns = (
             "id",
-            "part_number",
-            "beschreibung",
+            "teile",
             "hersteller",
-            "lieferant",
-            "menge",
+            "lieferanten",
             "order_date",
             "delivery_date",
             "status",
         )
         headings = {
             "id": "ID",
-            "part_number": "Teilenummer",
-            "beschreibung": "Beschreibung",
+            "teile": "Teile",
             "hersteller": "Hersteller",
-            "lieferant": "Lieferant",
-            "menge": "Bestellmenge",
+            "lieferanten": "Lieferanten",
             "order_date": "Bestelldatum",
             "delivery_date": "Lieferdatum",
             "status": "Status",
@@ -363,11 +373,9 @@ class Application(ttk.Frame):
         for column, label in headings.items():
             self.orders_tree.heading(column, text=label, command=lambda c=column: self._sort_orders(c))
         self.orders_tree.column("id", width=60, anchor="center")
-        self.orders_tree.column("part_number", width=140)
-        self.orders_tree.column("beschreibung", width=220)
-        self.orders_tree.column("hersteller", width=140)
-        self.orders_tree.column("lieferant", width=160)
-        self.orders_tree.column("menge", width=120, anchor="e")
+        self.orders_tree.column("teile", width=360, anchor="w")
+        self.orders_tree.column("hersteller", width=180, anchor="w")
+        self.orders_tree.column("lieferanten", width=200, anchor="w")
         self.orders_tree.column("order_date", width=120)
         self.orders_tree.column("delivery_date", width=120)
         self.orders_tree.column("status", width=140)
@@ -680,20 +688,60 @@ class Application(ttk.Frame):
 
     def refresh_orders(self) -> None:
         selection = self.get_selected_order()
-        self.orders_data = [
-            {
-                "id": row["id"],
-                "part_number": row["part_number"],
-                "description": row["description"] or "",
-                "manufacturer": row["manufacturer"] or "",
-                "supplier": row["supplier"] or "",
-                "quantity": row["quantity"],
-                "order_date": row["order_date"] or "",
-                "delivery_date": row["delivery_date"] or "",
-                "status": row["status"],
-            }
-            for row in list_orders(self.conn)
-        ]
+        self.orders_data = []
+        for summary in list_orders(self.conn):
+            items_label_parts = []
+            suppliers = set()
+            manufacturers = set()
+            search_terms = [
+                str(summary.id),
+                summary.status,
+                summary.order_date or "",
+                summary.delivery_date or "",
+            ]
+            for item in summary.items:
+                qty_text = format_decimal(item.quantity)
+                desc = item.description or "-"
+                items_label_parts.append(f"{item.part_number} × {qty_text} ({desc})")
+                if item.supplier:
+                    suppliers.add(item.supplier)
+                if item.manufacturer:
+                    manufacturers.add(item.manufacturer)
+                search_terms.extend(
+                    [
+                        item.part_number,
+                        item.description or "",
+                        item.supplier or "",
+                        item.manufacturer or "",
+                    ]
+                )
+            items_label = "; ".join(items_label_parts) if items_label_parts else "-"
+            suppliers_label = "; ".join(sorted(suppliers)) if suppliers else "-"
+            manufacturers_label = "; ".join(sorted(manufacturers)) if manufacturers else "-"
+            search_terms.extend([items_label, suppliers_label, manufacturers_label])
+
+            self.orders_data.append(
+                {
+                    "id": summary.id,
+                    "order_date": summary.order_date or "",
+                    "delivery_date": summary.delivery_date or "",
+                    "status": summary.status,
+                    "items": [
+                        {
+                            "part_number": item.part_number,
+                            "description": item.description or "",
+                            "manufacturer": item.manufacturer or "",
+                            "supplier": item.supplier or "",
+                            "quantity": item.quantity,
+                        }
+                        for item in summary.items
+                    ],
+                    "items_label": items_label,
+                    "suppliers_label": suppliers_label,
+                    "manufacturers_label": manufacturers_label,
+                    "search_blob": " ".join(term for term in search_terms if term).lower(),
+                }
+            )
         self._render_orders(selection)
 
     def _render_requirements(self) -> None:
@@ -810,25 +858,13 @@ class Application(ttk.Frame):
         filter_text = self.order_filter_var.get().strip().lower() if hasattr(self, "order_filter_var") else ""
         data = self.orders_data
         if filter_text:
-            data = [
-                entry
-                for entry in data
-                if filter_text in str(entry["id"]).lower()
-                or filter_text in entry["part_number"].lower()
-                or filter_text in entry["description"].lower()
-                or filter_text in entry["manufacturer"].lower()
-                or filter_text in entry["supplier"].lower()
-                or filter_text in entry["status"].lower()
-                or filter_text in entry["order_date"].lower()
-                or filter_text in entry["delivery_date"].lower()
-            ]
+            data = [entry for entry in data if filter_text in entry["search_blob"]]
 
         column = self.orders_sort_column
         column_map = {
-            "beschreibung": "description",
-            "hersteller": "manufacturer",
-            "lieferant": "supplier",
-            "menge": "quantity",
+            "teile": "items_label",
+            "hersteller": "manufacturers_label",
+            "lieferanten": "suppliers_label",
         }
         data_key = column_map.get(column, column)
         reverse = self.orders_sort_reverse
@@ -836,8 +872,6 @@ class Application(ttk.Frame):
         def sort_key(entry: dict[str, Any]):
             if data_key == "id":
                 return entry["id"]
-            if data_key == "quantity":
-                return entry["quantity"]
             if data_key in {"order_date", "delivery_date"}:
                 value = entry[data_key]
                 return (value == "", value)
@@ -855,11 +889,9 @@ class Application(ttk.Frame):
                 iid=str(entry["id"]),
                 values=(
                     entry["id"],
-                    entry["part_number"],
-                    entry["description"] or "-",
-                    entry["manufacturer"] or "-",
-                    entry["supplier"] or "-",
-                    format_decimal(entry["quantity"]),
+                    entry["items_label"],
+                    entry["manufacturers_label"],
+                    entry["suppliers_label"],
                     entry["order_date"] or "-",
                     entry["delivery_date"] or "-",
                     entry["status"],
@@ -1123,16 +1155,19 @@ class Application(ttk.Frame):
         dialog = OrderDialog(self, self.conn, title="Bestellung anlegen")
         if dialog.result is None:
             return
+        items = [
+            OrderItem(part_number=item["part_number"], quantity=item["quantity"])
+            for item in dialog.result["items"]
+        ]
         try:
             order_id = add_order(
                 self.conn,
-                PartOrder(
+                Order(
                     id=None,
-                    part_number=dialog.result["part_number"],
-                    quantity=dialog.result["quantity"],
                     order_date=dialog.result.get("order_date"),
                     delivery_date=dialog.result.get("delivery_date"),
                     status=dialog.result["status"],
+                    items=items,
                 ),
             )
         except ValueError as exc:
@@ -1153,16 +1188,19 @@ class Application(ttk.Frame):
         dialog = OrderDialog(self, self.conn, title="Bestellung bearbeiten", order=current)
         if dialog.result is None:
             return
+        items = [
+            OrderItem(part_number=item["part_number"], quantity=item["quantity"])
+            for item in dialog.result["items"]
+        ]
         try:
             update_order(
                 self.conn,
-                PartOrder(
+                Order(
                     id=order_id,
-                    part_number=dialog.result["part_number"],
-                    quantity=dialog.result["quantity"],
                     order_date=dialog.result.get("order_date"),
                     delivery_date=dialog.result.get("delivery_date"),
                     status=dialog.result["status"],
+                    items=items,
                 ),
             )
         except ValueError as exc:
@@ -1190,6 +1228,683 @@ class Application(ttk.Frame):
             self.conn.close()
         finally:
             self.master.destroy()
+
+
+class PartDialog(simpledialog.Dialog):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        title: str,
+        part: Optional[dict[str, Any]] = None,
+        allow_part_number_edit: bool = True,
+    ) -> None:
+        self._initial = part or {}
+        self._allow_part_number_edit = allow_part_number_edit
+        super().__init__(parent, title)
+
+    def body(self, master: tk.Misc) -> tk.Widget:
+        ttk.Label(master, text="Teilenummer:").grid(row=0, column=0, sticky="w")
+        self.part_number_var = tk.StringVar(value=self._initial.get("part_number", ""))
+        entry_part = ttk.Entry(master, textvariable=self.part_number_var, width=40)
+        entry_part.grid(row=0, column=1, sticky="ew")
+        if not self._allow_part_number_edit:
+            entry_part.configure(state="disabled")
+
+        ttk.Label(master, text="Beschreibung:").grid(row=1, column=0, sticky="w")
+        self.description_var = tk.StringVar(value=self._initial.get("description", ""))
+        ttk.Entry(master, textvariable=self.description_var, width=40).grid(row=1, column=1, sticky="ew")
+
+        ttk.Label(master, text="Lieferant:").grid(row=2, column=0, sticky="w")
+        self.supplier_var = tk.StringVar(value=self._initial.get("supplier", ""))
+        ttk.Entry(master, textvariable=self.supplier_var, width=40).grid(row=2, column=1, sticky="ew")
+
+        ttk.Label(master, text="Hersteller:").grid(row=3, column=0, sticky="w")
+        self.manufacturer_var = tk.StringVar(value=self._initial.get("manufacturer", ""))
+        ttk.Entry(master, textvariable=self.manufacturer_var, width=40).grid(row=3, column=1, sticky="ew")
+
+        ttk.Label(master, text="Preis (€):").grid(row=4, column=0, sticky="w")
+        price_value = self._initial.get("price")
+        initial_price = None
+        if isinstance(price_value, str) and price_value.endswith("€"):
+            initial_price = price_value[:-1].strip()
+        elif isinstance(price_value, (int, float)):
+            initial_price = format_decimal_entry(float(price_value))
+        self.price_var = tk.StringVar(value=initial_price or "")
+        ttk.Entry(master, textvariable=self.price_var, width=40).grid(row=4, column=1, sticky="ew")
+
+        ttk.Label(master, text="Shop-Link:").grid(row=5, column=0, sticky="w")
+        self.store_var = tk.StringVar(value=self._initial.get("store_link", ""))
+        ttk.Entry(master, textvariable=self.store_var, width=40).grid(row=5, column=1, sticky="ew")
+
+        master.columnconfigure(1, weight=1)
+        return entry_part
+
+    def validate(self) -> bool:
+        part_number = self.part_number_var.get().strip()
+        if not part_number:
+            messagebox.showerror("Fehler", "Teilenummer darf nicht leer sein.", parent=self)
+            return False
+        price_text = self.price_var.get().replace("€", "").strip()
+        if price_text:
+            try:
+                parse_decimal(price_text)
+            except ValueError:
+                messagebox.showerror("Fehler", "Preis muss eine Zahl sein.", parent=self)
+                return False
+        return True
+
+    def apply(self) -> None:
+        price_text = self.price_var.get().replace("€", "").strip()
+        price_value = parse_decimal(price_text) if price_text else None
+        self.result = {
+            "part_number": self.part_number_var.get().strip(),
+            "description": self.description_var.get().strip() or None,
+            "supplier": self.supplier_var.get().strip() or None,
+            "manufacturer": self.manufacturer_var.get().strip() or None,
+            "price": price_value,
+            "store_link": self.store_var.get().strip() or None,
+        }
+
+
+class ProductDialog(simpledialog.Dialog):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        title: str,
+        product: Optional[dict[str, Any]] = None,
+        allow_name_edit: bool = True,
+    ) -> None:
+        self._initial = product or {}
+        self._allow_name_edit = allow_name_edit
+        super().__init__(parent, title)
+
+    def body(self, master: tk.Misc) -> tk.Widget:
+        ttk.Label(master, text="Name:").grid(row=0, column=0, sticky="w")
+        self.name_var = tk.StringVar(value=self._initial.get("name", ""))
+        entry_name = ttk.Entry(master, textvariable=self.name_var, width=40)
+        entry_name.grid(row=0, column=1, sticky="ew")
+        if not self._allow_name_edit:
+            entry_name.configure(state="disabled")
+
+        ttk.Label(master, text="Beschreibung:").grid(row=1, column=0, sticky="w")
+        self.description_var = tk.StringVar(value=self._initial.get("description", ""))
+        ttk.Entry(master, textvariable=self.description_var, width=40).grid(row=1, column=1, sticky="ew")
+
+        master.columnconfigure(1, weight=1)
+        return entry_name
+
+    def validate(self) -> bool:
+        name = self.name_var.get().strip()
+        if not name:
+            messagebox.showerror("Fehler", "Produktname darf nicht leer sein.", parent=self)
+            return False
+        return True
+
+    def apply(self) -> None:
+        self.result = {
+            "name": self.name_var.get().strip(),
+            "description": self.description_var.get().strip() or None,
+        }
+
+
+class BomDialog(simpledialog.Dialog):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        conn: sqlite3.Connection,
+        title: str,
+        entry: Optional[dict[str, Any]] = None,
+        allow_part_edit: bool = True,
+    ) -> None:
+        self._initial = entry or {}
+        self._allow_part_edit = allow_part_edit
+        self._parts = [
+            {
+                "part_number": row["part_number"],
+                "description": row["description"] or "",
+                "supplier": row["supplier"] or "",
+                "manufacturer": row["manufacturer"] or "",
+            }
+            for row in list_parts(conn)
+        ]
+        self._filtered_parts: list[dict[str, str]] = []
+        self._updating_from_selection = False
+        super().__init__(parent, title)
+
+    def body(self, master: tk.Misc) -> tk.Widget:
+        ttk.Label(master, text="Teilenummer:").grid(row=0, column=0, sticky="w")
+        self.part_var = tk.StringVar(value=self._initial.get("part_number", ""))
+        entry_part = ttk.Entry(master, textvariable=self.part_var, width=40)
+        entry_part.grid(row=0, column=1, sticky="ew")
+        if not self._allow_part_edit:
+            entry_part.configure(state="disabled")
+
+        ttk.Label(master, text="Menge pro Produkt:").grid(row=1, column=0, sticky="w")
+        quantity = self._initial.get("quantity")
+        formatted_quantity = "" if quantity is None else format_decimal_entry(float(quantity))
+        self.quantity_var = tk.StringVar(value=formatted_quantity)
+        ttk.Entry(master, textvariable=self.quantity_var, width=40).grid(row=1, column=1, sticky="ew")
+
+        if self._allow_part_edit:
+            self.part_var.trace_add("write", self._on_part_var_change)
+
+            columns = ("part_number", "description", "manufacturer", "supplier")
+            self.parts_tree = ttk.Treeview(
+                master,
+                columns=columns,
+                show="headings",
+                height=8,
+            )
+            self.parts_tree.heading("part_number", text="Teilenummer")
+            self.parts_tree.heading("description", text="Beschreibung")
+            self.parts_tree.heading("manufacturer", text="Hersteller")
+            self.parts_tree.heading("supplier", text="Lieferant")
+            self.parts_tree.column("part_number", width=140, anchor="w")
+            self.parts_tree.column("description", width=220, anchor="w")
+            self.parts_tree.column("manufacturer", width=160, anchor="w")
+            self.parts_tree.column("supplier", width=160, anchor="w")
+            self.parts_tree.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
+
+            y_scroll = ttk.Scrollbar(master, orient="vertical", command=self.parts_tree.yview)
+            self.parts_tree.configure(yscrollcommand=y_scroll.set)
+            y_scroll.grid(row=2, column=2, sticky="ns", pady=(8, 0))
+
+            self.parts_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+            self.parts_tree.bind("<Double-1>", self._on_tree_double_click)
+            self.parts_tree.bind("<Return>", self._on_tree_double_click)
+
+            master.columnconfigure(1, weight=1)
+            master.rowconfigure(2, weight=1)
+            self._refresh_filtered_parts()
+        else:
+            master.columnconfigure(1, weight=1)
+
+        return entry_part
+
+    def validate(self) -> bool:
+        part_number = self.part_var.get().strip()
+        if not part_number:
+            messagebox.showerror("Fehler", "Teilenummer darf nicht leer sein.", parent=self)
+            return False
+        try:
+            quantity = parse_decimal(self.quantity_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Fehler", "Menge muss eine Zahl sein.", parent=self)
+            return False
+        if quantity <= 0:
+            messagebox.showerror("Fehler", "Menge muss größer 0 sein.", parent=self)
+            return False
+        return True
+
+    def apply(self) -> None:
+        self.result = {
+            "part_number": self.part_var.get().strip(),
+            "quantity": parse_decimal(self.quantity_var.get().strip()),
+        }
+
+    # ------------------------------------------------------------------
+    def _on_part_var_change(self, *_: Any) -> None:
+        if self._updating_from_selection:
+            return
+        self._refresh_filtered_parts()
+
+    def _refresh_filtered_parts(self) -> None:
+        query = self.part_var.get().strip().lower()
+        if not query:
+            self._filtered_parts = list(self._parts)
+        else:
+            self._filtered_parts = [
+                part
+                for part in self._parts
+                if query in part["part_number"].lower()
+                or query in part["description"].lower()
+                or query in part["supplier"].lower()
+                or query in part["manufacturer"].lower()
+            ]
+
+        for item in self.parts_tree.get_children():
+            self.parts_tree.delete(item)
+
+        for part in self._filtered_parts:
+            self.parts_tree.insert(
+                "",
+                "end",
+                iid=part["part_number"],
+                values=(
+                    part["part_number"],
+                    part["description"],
+                    part["manufacturer"],
+                    part["supplier"],
+                ),
+            )
+
+        current = self.part_var.get().strip()
+        if current and self.parts_tree.exists(current):
+            self.parts_tree.selection_set(current)
+            self.parts_tree.see(current)
+        else:
+            self.parts_tree.selection_remove(self.parts_tree.selection())
+
+    def _on_tree_select(self, _event: tk.Event) -> None:
+        selection = self.parts_tree.selection()
+        if not selection:
+            return
+        part_number = selection[0]
+        self._updating_from_selection = True
+        self.part_var.set(part_number)
+        self._updating_from_selection = False
+
+    def _on_tree_double_click(self, _event: tk.Event) -> None:
+        if self.parts_tree.selection():
+            self.ok()
+
+
+
+class CalendarDialog(simpledialog.Dialog):
+    def __init__(self, parent: tk.Misc, title: str = "Datum auswählen", initial: str | None = None) -> None:
+        self._initial = parse_iso_date(initial or "")
+        self._display_month = self._initial or date.today()
+        self._selected: date | None = self._initial
+        super().__init__(parent, title)
+
+    def body(self, master: tk.Misc) -> tk.Widget | None:
+        header = ttk.Frame(master)
+        header.pack(fill="x", pady=(0, 6))
+
+        ttk.Button(header, text="◀", width=3, command=lambda: self._change_month(-1)).pack(side="left")
+        self.month_label = ttk.Label(header, text="", anchor="center", font=("", 11, "bold"))
+        self.month_label.pack(side="left", expand=True, fill="x")
+        ttk.Button(header, text="▶", width=3, command=lambda: self._change_month(1)).pack(side="right")
+
+        weekday_frame = ttk.Frame(master)
+        weekday_frame.pack()
+        for idx, name in enumerate(calendar.weekheader(2).split()):
+            ttk.Label(weekday_frame, text=name, width=3, anchor="center").grid(row=0, column=idx, padx=2)
+
+        self.days_frame = ttk.Frame(master)
+        self.days_frame.pack()
+
+        actions = ttk.Frame(master)
+        actions.pack(fill="x", pady=(6, 0))
+        ttk.Button(actions, text="Heute", command=self._select_today).pack(side="right")
+
+        self._build_days()
+        return None
+
+    def apply(self) -> None:
+        self.result = self._selected.isoformat() if self._selected else None
+
+    def _build_days(self) -> None:
+        for child in self.days_frame.winfo_children():
+            child.destroy()
+
+        month_name = self._display_month.strftime("%B %Y")
+        self.month_label.configure(text=month_name)
+
+        cal = calendar.Calendar()
+        for row_index, week in enumerate(cal.monthdatescalendar(self._display_month.year, self._display_month.month)):
+            for col_index, day in enumerate(week):
+                state = tk.NORMAL if day.month == self._display_month.month else tk.DISABLED
+                btn = ttk.Button(
+                    self.days_frame,
+                    text=str(day.day),
+                    width=3,
+                    state=state,
+                    command=lambda d=day: self._select_day(d),
+                )
+                if self._selected and day == self._selected:
+                    btn.state(["pressed"])
+                btn.grid(row=row_index, column=col_index, padx=2, pady=2)
+
+    def _change_month(self, delta: int) -> None:
+        year = self._display_month.year
+        month = self._display_month.month + delta
+        while month < 1:
+            month += 12
+            year -= 1
+        while month > 12:
+            month -= 12
+            year += 1
+        self._display_month = date(year, month, 1)
+        self._build_days()
+
+    def _select_day(self, day: date) -> None:
+        self._selected = day
+        self.ok()
+
+    def _select_today(self) -> None:
+        today = date.today()
+        self._display_month = date(today.year, today.month, 1)
+        self._selected = today
+        self.ok()
+
+
+class OrderItemDialog(simpledialog.Dialog):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        conn: sqlite3.Connection,
+        title: str,
+        item: Optional[dict[str, Any]] = None,
+    ) -> None:
+        self._initial = item or {}
+        self._parts = [
+            {
+                "part_number": row["part_number"],
+                "description": row["description"] or "",
+                "manufacturer": row["manufacturer"] or "",
+                "supplier": row["supplier"] or "",
+            }
+            for row in list_parts(conn)
+        ]
+        self._filtered_parts: list[dict[str, str]] = []
+        self._updating_from_selection = False
+        super().__init__(parent, title)
+
+    def body(self, master: tk.Misc) -> tk.Widget:
+        ttk.Label(master, text="Teil:").grid(row=0, column=0, sticky="w")
+        self.part_var = tk.StringVar(value=self._initial.get("part_number", ""))
+        entry_part = ttk.Entry(master, textvariable=self.part_var, width=40)
+        entry_part.grid(row=0, column=1, sticky="ew")
+
+        ttk.Label(master, text="Menge:").grid(row=1, column=0, sticky="w")
+        quantity = self._initial.get("quantity")
+        initial_quantity = (
+            format_decimal_entry(float(quantity))
+            if isinstance(quantity, (int, float))
+            else self._initial.get("quantity_text", "")
+        )
+        self.quantity_var = tk.StringVar(value=initial_quantity)
+        ttk.Entry(master, textvariable=self.quantity_var, width=40).grid(row=1, column=1, sticky="ew")
+
+        self.part_var.trace_add("write", self._on_part_change)
+
+        columns = ("part_number", "description", "manufacturer", "supplier")
+        self.parts_tree = ttk.Treeview(master, columns=columns, show="headings", height=8)
+        self.parts_tree.heading("part_number", text="Teilenummer")
+        self.parts_tree.heading("description", text="Beschreibung")
+        self.parts_tree.heading("manufacturer", text="Hersteller")
+        self.parts_tree.heading("supplier", text="Lieferant")
+        for column in columns:
+            width = 220 if column == "description" else 160
+            self.parts_tree.column(column, anchor="w", width=width)
+        self.parts_tree.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(8, 0))
+
+        y_scroll = ttk.Scrollbar(master, orient="vertical", command=self.parts_tree.yview)
+        self.parts_tree.configure(yscrollcommand=y_scroll.set)
+        y_scroll.grid(row=2, column=2, sticky="ns", pady=(8, 0))
+
+        self.parts_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.parts_tree.bind("<Double-1>", self._on_tree_activate)
+        self.parts_tree.bind("<Return>", self._on_tree_activate)
+
+        master.columnconfigure(1, weight=1)
+        master.rowconfigure(2, weight=1)
+
+        self._refresh_parts()
+        return entry_part
+
+    def validate(self) -> bool:
+        part_number = self.part_var.get().strip()
+        if not part_number:
+            messagebox.showerror("Fehler", "Bitte eine Teilenummer auswählen.", parent=self)
+            return False
+        try:
+            quantity = parse_decimal(self.quantity_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Fehler", "Menge muss eine Zahl sein.", parent=self)
+            return False
+        if quantity <= 0:
+            messagebox.showerror("Fehler", "Menge muss größer 0 sein.", parent=self)
+            return False
+        self._quantity_value = quantity
+        return True
+
+    def apply(self) -> None:
+        part_number = self.part_var.get().strip()
+        part = next((entry for entry in self._parts if entry["part_number"] == part_number), None)
+        self.result = {
+            "part_number": part_number,
+            "quantity": self._quantity_value,
+            "description": part["description"] if part else "",
+            "manufacturer": part["manufacturer"] if part else "",
+            "supplier": part["supplier"] if part else "",
+        }
+
+    def _on_part_change(self, *_: Any) -> None:
+        if self._updating_from_selection:
+            return
+        self._refresh_parts()
+
+    def _refresh_parts(self) -> None:
+        query = self.part_var.get().strip().lower()
+        if not query:
+            self._filtered_parts = list(self._parts)
+        else:
+            self._filtered_parts = [
+                part
+                for part in self._parts
+                if query in part["part_number"].lower()
+                or query in part["description"].lower()
+                or query in part["manufacturer"].lower()
+                or query in part["supplier"].lower()
+            ]
+
+        for item in self.parts_tree.get_children():
+            self.parts_tree.delete(item)
+
+        for part in self._filtered_parts:
+            self.parts_tree.insert(
+                "",
+                "end",
+                iid=part["part_number"],
+                values=(
+                    part["part_number"],
+                    part["description"],
+                    part["manufacturer"],
+                    part["supplier"],
+                ),
+            )
+
+        current = self.part_var.get().strip()
+        if current and self.parts_tree.exists(current):
+            self.parts_tree.selection_set(current)
+            self.parts_tree.see(current)
+        else:
+            self.parts_tree.selection_remove(self.parts_tree.selection())
+
+    def _on_tree_select(self, _event: tk.Event) -> None:
+        selection = self.parts_tree.selection()
+        if not selection:
+            return
+        part_number = selection[0]
+        self._updating_from_selection = True
+        self.part_var.set(part_number)
+        self._updating_from_selection = False
+
+    def _on_tree_activate(self, _event: tk.Event) -> None:
+        if self.parts_tree.selection():
+            self.ok()
+
+
+class OrderDialog(simpledialog.Dialog):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        conn: sqlite3.Connection,
+        title: str,
+        order: Optional[dict[str, Any]] = None,
+    ) -> None:
+        self._initial = order or {}
+        self._conn = conn
+        self._items: list[dict[str, Any]] = [dict(item) for item in self._initial.get("items", [])]
+        self._order_date: str | None = None
+        self._delivery_date: str | None = None
+        super().__init__(parent, title)
+
+    def body(self, master: tk.Misc) -> tk.Widget:
+        ttk.Label(master, text="Bestelldatum:").grid(row=0, column=0, sticky="w")
+        self.order_date_var = tk.StringVar(value=self._initial.get("order_date", ""))
+        order_entry = self._create_date_field(master, 0, self.order_date_var)
+
+        ttk.Label(master, text="Lieferdatum:").grid(row=1, column=0, sticky="w")
+        self.delivery_date_var = tk.StringVar(value=self._initial.get("delivery_date", ""))
+        self._create_date_field(master, 1, self.delivery_date_var)
+
+        ttk.Label(master, text="Status:").grid(row=2, column=0, sticky="w")
+        self.status_var = tk.StringVar(value=self._initial.get("status", ORDER_STATUSES[0]))
+        status_box = ttk.Combobox(master, textvariable=self.status_var, values=ORDER_STATUSES, state="readonly")
+        status_box.grid(row=2, column=1, sticky="ew")
+
+        columns = ("part_number", "description", "manufacturer", "supplier", "quantity")
+        self.items_tree = ttk.Treeview(master, columns=columns, show="headings", height=8)
+        headings = {
+            "part_number": "Teilenummer",
+            "description": "Beschreibung",
+            "manufacturer": "Hersteller",
+            "supplier": "Lieferant",
+            "quantity": "Menge",
+        }
+        for column, label in headings.items():
+            self.items_tree.heading(column, text=label)
+            anchor = "e" if column == "quantity" else "w"
+            width = 120 if column == "quantity" else (220 if column == "description" else 160)
+            self.items_tree.column(column, width=width, anchor=anchor)
+        self.items_tree.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=(12, 0))
+
+        y_scroll = ttk.Scrollbar(master, orient="vertical", command=self.items_tree.yview)
+        self.items_tree.configure(yscrollcommand=y_scroll.set)
+        y_scroll.grid(row=3, column=2, sticky="ns", pady=(12, 0))
+
+        button_frame = ttk.Frame(master)
+        button_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        ttk.Button(button_frame, text="Teil hinzufügen", command=self._on_add_item).pack(side="left")
+        ttk.Button(button_frame, text="Teil bearbeiten", command=self._on_edit_item).pack(side="left", padx=6)
+        ttk.Button(button_frame, text="Teil entfernen", command=self._on_remove_item).pack(side="left")
+
+        self.items_tree.bind("<Double-1>", lambda _evt: self._on_edit_item())
+
+        master.columnconfigure(1, weight=1)
+        master.rowconfigure(3, weight=1)
+
+        self._refresh_items()
+        return order_entry
+
+    def validate(self) -> bool:
+        order_date_text = self.order_date_var.get().strip()
+        delivery_date_text = self.delivery_date_var.get().strip()
+        order_date = parse_iso_date(order_date_text) if order_date_text else None
+        if order_date_text and order_date is None:
+            messagebox.showerror("Fehler", "Bestelldatum muss im Format JJJJ-MM-TT sein.", parent=self)
+            return False
+        delivery_date = parse_iso_date(delivery_date_text) if delivery_date_text else None
+        if delivery_date_text and delivery_date is None:
+            messagebox.showerror("Fehler", "Lieferdatum muss im Format JJJJ-MM-TT sein.", parent=self)
+            return False
+        status = self.status_var.get().strip()
+        if status not in ORDER_STATUSES:
+            messagebox.showerror("Fehler", "Bitte einen gültigen Status wählen.", parent=self)
+            return False
+        if not self._items:
+            messagebox.showerror("Fehler", "Eine Bestellung benötigt mindestens ein Teil.", parent=self)
+            return False
+        self._order_date = order_date.isoformat() if order_date else None
+        self._delivery_date = delivery_date.isoformat() if delivery_date else None
+        return True
+
+    def apply(self) -> None:
+        self.result = {
+            "order_date": self._order_date,
+            "delivery_date": self._delivery_date,
+            "status": self.status_var.get().strip(),
+            "items": [
+                {
+                    "part_number": item["part_number"],
+                    "quantity": item["quantity"],
+                    "description": item["description"],
+                    "manufacturer": item["manufacturer"],
+                    "supplier": item["supplier"],
+                }
+                for item in self._items
+            ],
+        }
+
+    def _create_date_field(self, master: tk.Misc, row: int, variable: tk.StringVar) -> ttk.Entry:
+        frame = ttk.Frame(master)
+        frame.grid(row=row, column=1, sticky="ew")
+        entry = ttk.Entry(frame, textvariable=variable, width=20)
+        entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(frame, text="Kalender", command=lambda: self._pick_date(variable)).pack(side="left", padx=(4, 0))
+        ttk.Button(frame, text="Heute", command=lambda: self._set_today(variable)).pack(side="left", padx=(4, 0))
+        return entry
+
+    def _refresh_items(self) -> None:
+        for item in self.items_tree.get_children():
+            self.items_tree.delete(item)
+        for index, item in enumerate(self._items):
+            self.items_tree.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=(
+                    item["part_number"],
+                    item["description"] or "-",
+                    item["manufacturer"] or "-",
+                    item["supplier"] or "-",
+                    format_decimal(item["quantity"]),
+                ),
+            )
+
+    def _get_selected_index(self) -> Optional[int]:
+        selection = self.items_tree.selection()
+        if not selection:
+            return None
+        try:
+            return int(selection[0])
+        except (TypeError, ValueError):
+            return None
+
+    def _on_add_item(self) -> None:
+        dialog = OrderItemDialog(self, self._conn, title="Teil hinzufügen")
+        if dialog.result is None:
+            return
+        self._upsert_item(dialog.result)
+
+    def _on_edit_item(self) -> None:
+        index = self._get_selected_index()
+        if index is None:
+            messagebox.showinfo("Hinweis", "Bitte zuerst einen Eintrag auswählen.", parent=self)
+            return
+        dialog = OrderItemDialog(self, self._conn, title="Teil bearbeiten", item=self._items[index])
+        if dialog.result is None:
+            return
+        self._items[index] = dialog.result
+        self._refresh_items()
+
+    def _on_remove_item(self) -> None:
+        index = self._get_selected_index()
+        if index is None:
+            messagebox.showinfo("Hinweis", "Bitte zuerst einen Eintrag auswählen.", parent=self)
+            return
+        del self._items[index]
+        self._refresh_items()
+
+    def _upsert_item(self, new_item: dict[str, Any]) -> None:
+        for idx, item in enumerate(self._items):
+            if item["part_number"] == new_item["part_number"]:
+                self._items[idx] = new_item
+                self._refresh_items()
+                return
+        self._items.append(new_item)
+        self._refresh_items()
+
+    def _pick_date(self, variable: tk.StringVar) -> None:
+        dialog = CalendarDialog(self, initial=variable.get().strip())
+        if dialog.result:
+            variable.set(dialog.result)
+
+    def _set_today(self, variable: tk.StringVar) -> None:
+        variable.set(date.today().isoformat())
 
 
 class PartDialog(simpledialog.Dialog):

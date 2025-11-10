@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import Dict, List, Sequence
 
 from .database import transaction
 
@@ -44,13 +44,37 @@ class SupplierRequirement:
 
 
 @dataclass
-class PartOrder:
-    id: int | None
+class OrderItem:
     part_number: str
     quantity: float
+
+
+@dataclass
+class Order:
+    id: int | None
     order_date: str | None
     delivery_date: str | None
     status: str
+    items: List[OrderItem]
+
+
+@dataclass
+class OrderItemDetail:
+    part_number: str
+    description: str | None
+    manufacturer: str | None
+    supplier: str | None
+    quantity: float
+
+
+@dataclass
+class OrderSummary:
+    id: int
+    order_date: str | None
+    delivery_date: str | None
+    status: str
+    created_at: str
+    items: List[OrderItemDetail]
 
 
 def add_part(conn: sqlite3.Connection, part: Part) -> None:
@@ -293,38 +317,41 @@ def fetch_supplier_requirements(conn: sqlite3.Connection) -> List[SupplierRequir
 ORDER_STATUSES = ("Offen", "Bestellt", "In Zulieferung", "Geliefert", "Im Lager")
 
 
-def add_order(conn: sqlite3.Connection, order: PartOrder) -> int:
+def add_order(conn: sqlite3.Connection, order: Order) -> int:
     if order.status not in ORDER_STATUSES:
         raise ValueError("Ungültiger Bestellstatus")
-    part_id = get_part_id(conn, order.part_number)
+    if not order.items:
+        raise ValueError("Eine Bestellung benötigt mindestens ein Teil")
+
+    items = _resolve_order_items(conn, order.items)
     with transaction(conn) as cur:
         cursor = cur.execute(
-            """
-            INSERT INTO orders(part_id, quantity, order_date, delivery_date, status)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (part_id, order.quantity, order.order_date, order.delivery_date, order.status),
+            "INSERT INTO orders(order_date, delivery_date, status) VALUES (?, ?, ?)",
+            (order.order_date, order.delivery_date, order.status),
         )
-        return int(cursor.lastrowid)
+        order_id = int(cursor.lastrowid)
+        _write_order_items(cur, order_id, items)
+        return order_id
 
 
-def update_order(conn: sqlite3.Connection, order: PartOrder) -> None:
+def update_order(conn: sqlite3.Connection, order: Order) -> None:
     if order.id is None:
         raise ValueError("Order-ID fehlt")
     if order.status not in ORDER_STATUSES:
         raise ValueError("Ungültiger Bestellstatus")
-    part_id = get_part_id(conn, order.part_number)
+    if not order.items:
+        raise ValueError("Eine Bestellung benötigt mindestens ein Teil")
+
+    items = _resolve_order_items(conn, order.items)
     with transaction(conn) as cur:
         result = cur.execute(
-            """
-            UPDATE orders
-               SET part_id = ?, quantity = ?, order_date = ?, delivery_date = ?, status = ?
-             WHERE id = ?
-            """,
-            (part_id, order.quantity, order.order_date, order.delivery_date, order.status, order.id),
+            "UPDATE orders SET order_date = ?, delivery_date = ?, status = ? WHERE id = ?",
+            (order.order_date, order.delivery_date, order.status, order.id),
         )
         if result.rowcount == 0:
             raise ValueError("Bestellung existiert nicht")
+        cur.execute("DELETE FROM order_items WHERE order_id = ?", (order.id,))
+        _write_order_items(cur, order.id, items)
 
 
 def remove_order(conn: sqlite3.Connection, order_id: int) -> None:
@@ -334,23 +361,81 @@ def remove_order(conn: sqlite3.Connection, order_id: int) -> None:
             raise ValueError("Bestellung existiert nicht")
 
 
-def list_orders(conn: sqlite3.Connection) -> Sequence[sqlite3.Row]:
-    return conn.execute(
+def list_orders(conn: sqlite3.Connection) -> List[OrderSummary]:
+    order_rows = conn.execute(
         """
-        SELECT o.id,
-               o.quantity,
-               o.order_date,
-               o.delivery_date,
-               o.status,
-               p.part_number,
-               p.description,
-               p.supplier,
-               p.manufacturer
-          FROM orders AS o
-          JOIN parts AS p ON p.id = o.part_id
-         ORDER BY o.order_date IS NULL, o.order_date, o.id
+        SELECT id, order_date, delivery_date, status, created_at
+          FROM orders
+         ORDER BY order_date IS NULL, order_date, id
         """
     ).fetchall()
+    if not order_rows:
+        return []
+
+    order_ids = [row["id"] for row in order_rows]
+    placeholders = ",".join("?" for _ in order_ids)
+    item_rows = conn.execute(
+        f"""
+        SELECT oi.order_id,
+               p.part_number,
+               p.description,
+               p.manufacturer,
+               p.supplier,
+               oi.quantity
+          FROM order_items AS oi
+          JOIN parts AS p ON p.id = oi.part_id
+         WHERE oi.order_id IN ({placeholders})
+         ORDER BY oi.order_id, p.part_number COLLATE NOCASE
+        """,
+        order_ids,
+    ).fetchall()
+
+    items_by_order: Dict[int, List[OrderItemDetail]] = {order_id: [] for order_id in order_ids}
+    for item in item_rows:
+        items_by_order[item["order_id"]].append(
+            OrderItemDetail(
+                part_number=item["part_number"],
+                description=item["description"],
+                manufacturer=item["manufacturer"],
+                supplier=item["supplier"],
+                quantity=item["quantity"],
+            )
+        )
+
+    summaries: List[OrderSummary] = []
+    for row in order_rows:
+        summaries.append(
+            OrderSummary(
+                id=row["id"],
+                order_date=row["order_date"],
+                delivery_date=row["delivery_date"],
+                status=row["status"],
+                created_at=row["created_at"],
+                items=items_by_order.get(row["id"], []),
+            )
+        )
+    return summaries
+
+
+def _resolve_order_items(conn: sqlite3.Connection, items: Sequence[OrderItem]) -> List[tuple[int, float]]:
+    aggregated: Dict[int, float] = {}
+    for item in items:
+        part_number = item.part_number.strip()
+        if not part_number:
+            raise ValueError("Teilenummer darf nicht leer sein")
+        if item.quantity <= 0:
+            raise ValueError("Mengen müssen größer 0 sein")
+        part_id = get_part_id(conn, part_number)
+        aggregated[part_id] = aggregated.get(part_id, 0.0) + item.quantity
+    return [(part_id, quantity) for part_id, quantity in aggregated.items()]
+
+
+def _write_order_items(cur: sqlite3.Connection, order_id: int, items: Sequence[tuple[int, float]]) -> None:
+    for part_id, quantity in items:
+        cur.execute(
+            "INSERT INTO order_items(order_id, part_id, quantity) VALUES (?, ?, ?)",
+            (order_id, part_id, quantity),
+        )
 
 
 def clone_bom(conn: sqlite3.Connection, source_product: str, target_product: str, scale: float = 1.0) -> None:

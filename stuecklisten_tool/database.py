@@ -74,12 +74,18 @@ SCHEMA = [
     """
     CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        part_id INTEGER NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
-        quantity REAL NOT NULL CHECK(quantity > 0),
         order_date TEXT,
         delivery_date TEXT,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS order_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        part_id INTEGER NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
+        quantity REAL NOT NULL CHECK(quantity > 0)
     )
     """,
 ]
@@ -102,6 +108,7 @@ def initialize_database(conn: sqlite3.Connection) -> None:
         for statement in SCHEMA:
             conn.execute(statement)
         _ensure_column(conn, "parts", "manufacturer", "ALTER TABLE parts ADD COLUMN manufacturer TEXT")
+        _migrate_orders(conn)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
@@ -109,6 +116,42 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
     if any(row[1] == column for row in info):
         return
     conn.execute(ddl)
+
+
+def _migrate_orders(conn: sqlite3.Connection) -> None:
+    info = conn.execute("PRAGMA table_info(orders)").fetchall()
+    column_names = {row[1] for row in info}
+    if "part_id" not in column_names:
+        return
+
+    with transaction(conn) as cur:
+        cur.execute("ALTER TABLE orders RENAME TO orders_old")
+        cur.execute(
+            """
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_date TEXT,
+                delivery_date TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO orders(id, order_date, delivery_date, status, created_at)
+            SELECT id, order_date, delivery_date, status, created_at
+              FROM orders_old
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO order_items(order_id, part_id, quantity)
+            SELECT id, part_id, quantity
+              FROM orders_old
+            """
+        )
+        cur.execute("DROP TABLE orders_old")
 
 
 @contextlib.contextmanager

@@ -24,7 +24,7 @@ Neben dem Terminal-Interface gibt es eine Oberfläche auf Basis von Tkinter. All
 
 - einen Überblick über den aggregierten Teilebedarf inklusive Hersteller- und Lieferanteninformationen,
 - eine zweite Übersicht, die den Gesamtbedarf pro Lieferant aufschlüsselt,
-- einen Reiter „Bestellungen“ zum Erfassen, Aktualisieren und Verfolgen von Bestellungen (inkl. Status, Bestell- und Lieferdatum).
+- einen Reiter „Bestellungen“ zum Erfassen, Aktualisieren und Verfolgen von Bestellungen – inklusive Mehrfach-Positionen sowie Kalender- bzw. Heute-Schaltflächen für Bestell- und Lieferdatum.
 
 ```bash
 python -m stuecklisten_tool gui
@@ -81,13 +81,13 @@ python -m stuecklisten_tool calculate-requirements
 python -m stuecklisten_tool supplier-summary
 
 # Bestellung anlegen und verwalten
-python -m stuecklisten_tool add-order T1 6 --order-date 2024-05-01 --status "Bestellt"
+python -m stuecklisten_tool add-order --item T1=6 --item T2=3 --order-date 2024-05-01 --status "Bestellt"
 python -m stuecklisten_tool list-orders
 ```
 
 ## Bestellungen & Lieferübersichten
 
-Mit dem neuen Bestellmodul kannst du für jedes Teil Bestellungen mit Menge, Status, Bestell- und Lieferdatum erfassen. Die GUI bündelt diese Informationen im Reiter „Bestellungen“, während die Auswertung zusätzlich zeigt, wie viele Teile pro Lieferant insgesamt benötigt werden. So hast du sowohl den aktuellen Bedarf als auch offene Bestellungen jederzeit im Blick.
+Mit dem Bestellmodul kannst du komplette Aufträge mit beliebig vielen Positionen erfassen. Im Terminal gibst du jede Position über `--item TEIL=MENGE` an; die GUI erlaubt das komfortable Hinzufügen, Bearbeiten und Entfernen mehrerer Teile pro Bestellung und bietet für beide Datumsfelder eine Kalenderauswahl sowie eine „Heute“-Schaltfläche. Die Auswertung zeigt zusätzlich, wie viele Teile pro Lieferant insgesamt benötigt werden – so hast du sowohl Bedarf als auch offene Bestellungen jederzeit im Blick.
 
 ## Versionierung
 

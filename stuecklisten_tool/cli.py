@@ -18,7 +18,8 @@ if __package__ in {None, ""}:
     from stuecklisten_tool.operations import (
         ORDER_STATUSES,
         Part,
-        PartOrder,
+        Order,
+        OrderItem,
         Product,
         SupplierRequirement,
         add_order,
@@ -52,7 +53,8 @@ else:
     from .operations import (
         ORDER_STATUSES,
         Part,
-        PartOrder,
+        Order,
+        OrderItem,
         Product,
         SupplierRequirement,
         add_order,
@@ -97,6 +99,33 @@ def parse_decimal(value: str) -> float:
         return float(text)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"Ungültige Zahl: {value}") from exc
+
+
+def parse_order_items(entries: list[str] | None) -> list[OrderItem]:
+    if not entries:
+        return []
+    items: list[OrderItem] = []
+    for entry in entries:
+        raw = entry.strip()
+        if not raw:
+            continue
+        if ":" in raw:
+            part_text, quantity_text = raw.split(":", 1)
+        elif "=" in raw:
+            part_text, quantity_text = raw.split("=", 1)
+        else:
+            raise ValueError(
+                "Ungültiges Positionsformat. Erwartet TEIL=MENGE oder TEIL:MENGE"
+            )
+        part = part_text.strip()
+        if not part:
+            raise ValueError("Teilenummer darf nicht leer sein")
+        try:
+            quantity = parse_decimal(quantity_text)
+        except argparse.ArgumentTypeError as exc:
+            raise ValueError(str(exc)) from exc
+        items.append(OrderItem(part_number=part, quantity=quantity))
+    return items
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -176,16 +205,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     order_parser = subparsers.add_parser("add-order", help="Neue Bestellung erfassen")
-    order_parser.add_argument("part_number")
-    order_parser.add_argument("quantity", type=parse_decimal)
+    order_parser.add_argument(
+        "--item",
+        dest="items",
+        metavar="TEIL=MENGE",
+        action="append",
+        required=True,
+        help="Bestellposition im Format TEIL=MENGE oder TEIL:MENGE",
+    )
     order_parser.add_argument("--order-date")
     order_parser.add_argument("--delivery-date")
     order_parser.add_argument("--status", choices=ORDER_STATUSES, default=ORDER_STATUSES[0])
 
     update_order_parser = subparsers.add_parser("update-order", help="Bestehende Bestellung ändern")
     update_order_parser.add_argument("order_id", type=int)
-    update_order_parser.add_argument("part_number")
-    update_order_parser.add_argument("quantity", type=parse_decimal)
+    update_order_parser.add_argument(
+        "--item",
+        dest="items",
+        metavar="TEIL=MENGE",
+        action="append",
+        required=True,
+        help="Bestellposition im Format TEIL=MENGE oder TEIL:MENGE",
+    )
     update_order_parser.add_argument("--order-date")
     update_order_parser.add_argument("--delivery-date")
     update_order_parser.add_argument("--status", choices=ORDER_STATUSES, default=ORDER_STATUSES[0])
@@ -388,48 +429,73 @@ def command_supplier_summary(conn, _args) -> None:
 
 
 def command_add_order(conn, args) -> None:
-    order_id = add_order(
-        conn,
-        PartOrder(
-            id=None,
-            part_number=args.part_number,
-            quantity=args.quantity,
-            order_date=args.order_date,
-            delivery_date=args.delivery_date,
-            status=args.status,
-        ),
-    )
-    print(f"Bestellung {order_id} angelegt.")
+    try:
+        items = parse_order_items(args.items)
+    except ValueError as exc:
+        print(f"Fehler: {exc}")
+        return
+
+    try:
+        order_id = add_order(
+            conn,
+            Order(
+                id=None,
+                order_date=args.order_date,
+                delivery_date=args.delivery_date,
+                status=args.status,
+                items=items,
+            ),
+        )
+    except ValueError as exc:
+        print(f"Fehler: {exc}")
+    else:
+        print(f"Bestellung {order_id} angelegt.")
 
 
 def command_update_order(conn, args) -> None:
-    update_order(
-        conn,
-        PartOrder(
-            id=args.order_id,
-            part_number=args.part_number,
-            quantity=args.quantity,
-            order_date=args.order_date,
-            delivery_date=args.delivery_date,
-            status=args.status,
-        ),
-    )
-    print(f"Bestellung {args.order_id} aktualisiert.")
+    try:
+        items = parse_order_items(args.items)
+    except ValueError as exc:
+        print(f"Fehler: {exc}")
+        return
+
+    try:
+        update_order(
+            conn,
+            Order(
+                id=args.order_id,
+                order_date=args.order_date,
+                delivery_date=args.delivery_date,
+                status=args.status,
+                items=items,
+            ),
+        )
+    except ValueError as exc:
+        print(f"Fehler: {exc}")
+    else:
+        print(f"Bestellung {args.order_id} aktualisiert.")
 
 
 def command_list_orders(conn, _args) -> None:
-    rows = list_orders(conn)
-    if not rows:
+    orders = list_orders(conn)
+    if not orders:
         print("Keine Bestellungen vorhanden.")
         return
-    print("ID | Teil | Menge | Bestelldatum | Lieferdatum | Status")
-    print("-" * 88)
-    for row in rows:
-        part_label = f"{row['part_number']} ({row['description'] or '-'})"
+    for order in orders:
+        order_date = order.order_date or "-"
+        delivery_date = order.delivery_date or "-"
         print(
-            f"{row['id']} | {part_label} | {row['quantity']:.2f} | "
-            f"{row['order_date'] or '-'} | {row['delivery_date'] or '-'} | {row['status']}"
+            f"ID {order.id}: Status {order.status} | Bestelldatum: {order_date} | "
+            f"Lieferdatum: {delivery_date}"
         )
+        for item in order.items:
+            description = item.description or "-"
+            supplier = item.supplier or "-"
+            manufacturer = item.manufacturer or "-"
+            print(
+                f"  - {item.part_number} × {item.quantity:.2f} | {description} | "
+                f"Hersteller: {manufacturer} | Lieferant: {supplier}"
+            )
 
 
 def command_remove_order(conn, args) -> None:
