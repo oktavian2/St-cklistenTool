@@ -18,6 +18,22 @@ python -m pip install -e .
 stuecklisten-tool --help
 ```
 
+## Grafische Oberfläche
+
+Neben dem Terminal-Interface gibt es eine einfache Oberfläche auf Basis von Tkinter. Sie zeigt Teile, Produkte, Stücklisten sowie den aggregierten Teilebedarf an und erlaubt das Bearbeiten der wichtigsten Daten.
+
+```bash
+python -m stuecklisten_tool gui
+# oder nach Installation:
+stuecklisten-tool gui
+```
+
+Per Dropdown „Datenbank“ (`--db`) kann wie gewohnt eine alternative SQLite-Datei angegeben werden:
+
+```bash
+python -m stuecklisten_tool --db pfad/zur/datei.db gui
+```
+
 ## Datenbank
 
 Standardmäßig legt das Programm eine Datei `stuecklisten.db` im aktuellen Verzeichnis an. Mit `--db` kann ein anderer Speicherort gewählt werden. Der Befehl `init-db` erzeugt das Schema manuell, alle anderen Befehle initialisieren die Datenbank automatisch.

@@ -158,6 +158,36 @@ def list_product_requirements(conn: sqlite3.Connection) -> Sequence[sqlite3.Row]
     ).fetchall()
 
 
+def get_product_requirement(conn: sqlite3.Connection, product: str) -> float | None:
+    """Return the stored demand for a product or ``None`` if not set."""
+    product_id = get_product_id(conn, product)
+    row = conn.execute(
+        "SELECT quantity FROM product_requirements WHERE product_id = ?",
+        (product_id,),
+    ).fetchone()
+    return None if row is None else float(row["quantity"])
+
+
+def list_bom_entries(conn: sqlite3.Connection, product: str) -> Sequence[sqlite3.Row]:
+    """List all bill-of-material entries for the given product."""
+    product_id = get_product_id(conn, product)
+    return conn.execute(
+        """
+        SELECT parts.part_number,
+               parts.description,
+               parts.supplier,
+               parts.price,
+               parts.store_link,
+               bom.quantity
+          FROM bill_of_materials AS bom
+          JOIN parts ON parts.id = bom.part_id
+         WHERE bom.product_id = ?
+         ORDER BY parts.part_number
+        """,
+        (product_id,),
+    ).fetchall()
+
+
 def fetch_requirements(conn: sqlite3.Connection) -> List[Requirement]:
     rows = conn.execute(
         """

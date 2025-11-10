@@ -25,6 +25,7 @@ if __package__ in {None, ""}:
         list_product_requirements,
         list_products,
         list_versions,
+        list_bom_entries,
         remove_bom_entry,
         remove_part,
         remove_product,
@@ -36,6 +37,7 @@ if __package__ in {None, ""}:
         add_part,
         add_product,
         get_version_details,
+        get_product_requirement,
     )
 else:
     from . import database
@@ -49,6 +51,7 @@ else:
         list_product_requirements,
         list_products,
         list_versions,
+        list_bom_entries,
         remove_bom_entry,
         remove_part,
         remove_product,
@@ -60,6 +63,7 @@ else:
         add_part,
         add_product,
         get_version_details,
+        get_product_requirement,
     )
 
 DEFAULT_DB_PATH = Path("stuecklisten.db")
@@ -148,6 +152,8 @@ def build_parser() -> argparse.ArgumentParser:
     version_details = subparsers.add_parser("show-version", help="Details einer Version anzeigen")
     version_details.add_argument("name")
     version_details.add_argument("--as-json", action="store_true")
+
+    subparsers.add_parser("gui", help="Grafische Oberfläche starten")
 
     return parser
 
@@ -368,6 +374,16 @@ def command_show_version(conn, args) -> None:
             print(f"{demand['product_name']}: {demand['quantity']}")
 
 
+def command_gui(conn, args) -> None:
+    # Import hier um CLI ohne Tkinter-Abhängigkeit nutzen zu können.
+    if __package__ in {None, ""}:
+        from stuecklisten_tool.ui import launch_gui  # type: ignore
+    else:
+        from .ui import launch_gui
+
+    launch_gui(conn, args.db)
+
+
 COMMANDS = {
     "init-db": command_init_db,
     "add-part": command_add_part,
@@ -388,6 +404,7 @@ COMMANDS = {
     "create-version": command_create_version,
     "list-versions": command_list_versions,
     "show-version": command_show_version,
+    "gui": command_gui,
 }
 
 
