@@ -46,6 +46,9 @@ def add_part(conn: sqlite3.Connection, part: Part) -> None:
 
 
 def update_part(conn: sqlite3.Connection, part: Part) -> None:
+    # Sicherstellen, dass das Teil existiert, damit ein unveränderter Datensatz
+    # nicht fälschlicherweise als "nicht gefunden" gewertet wird.
+    get_part_id(conn, part.part_number)
     with transaction(conn) as cur:
         cur.execute(
             """
@@ -55,8 +58,6 @@ def update_part(conn: sqlite3.Connection, part: Part) -> None:
             """,
             (part.description, part.supplier, part.price, part.store_link, part.part_number),
         )
-        if cur.rowcount == 0:
-            raise ValueError(f"Teil {part.part_number!r} existiert nicht")
 
 
 def get_part_id(conn: sqlite3.Connection, part_number: str) -> int:
@@ -88,13 +89,13 @@ def add_product(conn: sqlite3.Connection, product: Product) -> None:
 
 
 def update_product(conn: sqlite3.Connection, product: Product) -> None:
+    # Sicherstellen, dass das Produkt existiert (auch wenn keine Änderung erfolgt).
+    get_product_id(conn, product.name)
     with transaction(conn) as cur:
         cur.execute(
             "UPDATE products SET description = ? WHERE name = ?",
             (product.description, product.name),
         )
-        if cur.rowcount == 0:
-            raise ValueError(f"Produkt {product.name!r} existiert nicht")
 
 
 def list_parts(conn: sqlite3.Connection) -> Sequence[sqlite3.Row]:
@@ -310,15 +311,15 @@ def get_version_details(conn: sqlite3.Connection, name: str) -> tuple[Sequence[s
 
 def remove_part(conn: sqlite3.Connection, part_number: str) -> None:
     with transaction(conn) as cur:
-        cur.execute("DELETE FROM parts WHERE part_number = ?", (part_number,))
-        if cur.rowcount == 0:
+        result = cur.execute("DELETE FROM parts WHERE part_number = ?", (part_number,))
+        if result.rowcount == 0:
             raise ValueError(f"Teil {part_number!r} existiert nicht")
 
 
 def remove_product(conn: sqlite3.Connection, product_name: str) -> None:
     with transaction(conn) as cur:
-        cur.execute("DELETE FROM products WHERE name = ?", (product_name,))
-        if cur.rowcount == 0:
+        result = cur.execute("DELETE FROM products WHERE name = ?", (product_name,))
+        if result.rowcount == 0:
             raise ValueError(f"Produkt {product_name!r} existiert nicht")
 
 
@@ -326,20 +327,20 @@ def remove_bom_entry(conn: sqlite3.Connection, product: str, part: str) -> None:
     product_id = get_product_id(conn, product)
     part_id = get_part_id(conn, part)
     with transaction(conn) as cur:
-        cur.execute(
+        result = cur.execute(
             "DELETE FROM bill_of_materials WHERE product_id = ? AND part_id = ?",
             (product_id, part_id),
         )
-        if cur.rowcount == 0:
+        if result.rowcount == 0:
             raise ValueError("Eintrag nicht gefunden")
 
 
 def remove_requirement(conn: sqlite3.Connection, product: str) -> None:
     product_id = get_product_id(conn, product)
     with transaction(conn) as cur:
-        cur.execute(
+        result = cur.execute(
             "DELETE FROM product_requirements WHERE product_id = ?",
             (product_id,),
         )
-        if cur.rowcount == 0:
+        if result.rowcount == 0:
             raise ValueError(f"Für Produkt {product!r} ist keine Losgröße hinterlegt")
