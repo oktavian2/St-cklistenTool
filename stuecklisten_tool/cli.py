@@ -7,29 +7,60 @@ import json
 from pathlib import Path
 from typing import Any
 
-from . import database
-from .operations import (
-    Part,
-    Product,
-    clone_bom,
-    create_version,
-    fetch_requirements,
-    list_parts,
-    list_product_requirements,
-    list_products,
-    list_versions,
-    remove_bom_entry,
-    remove_part,
-    remove_product,
-    remove_requirement,
-    set_bom_entry,
-    set_product_requirement,
-    update_part,
-    update_product,
-    add_part,
-    add_product,
-    get_version_details,
-)
+if __package__ in {None, ""}:
+    import sys
+
+    PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+    if str(PACKAGE_ROOT) not in sys.path:
+        sys.path.insert(0, str(PACKAGE_ROOT))
+
+    from stuecklisten_tool import database
+    from stuecklisten_tool.operations import (
+        Part,
+        Product,
+        clone_bom,
+        create_version,
+        fetch_requirements,
+        list_parts,
+        list_product_requirements,
+        list_products,
+        list_versions,
+        remove_bom_entry,
+        remove_part,
+        remove_product,
+        remove_requirement,
+        set_bom_entry,
+        set_product_requirement,
+        update_part,
+        update_product,
+        add_part,
+        add_product,
+        get_version_details,
+    )
+else:
+    from . import database
+    from .operations import (
+        Part,
+        Product,
+        clone_bom,
+        create_version,
+        fetch_requirements,
+        list_parts,
+        list_product_requirements,
+        list_products,
+        list_versions,
+        remove_bom_entry,
+        remove_part,
+        remove_product,
+        remove_requirement,
+        set_bom_entry,
+        set_product_requirement,
+        update_part,
+        update_product,
+        add_part,
+        add_product,
+        get_version_details,
+    )
 
 DEFAULT_DB_PATH = Path("stuecklisten.db")
 
